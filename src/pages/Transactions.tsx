@@ -12,16 +12,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { 
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import { PlusCircle, Search, Filter, ShoppingBag, Car, Home, Utensils } from "lucide-react";
-import { toast } from "sonner";
+import { NewExpenseForm } from "@/components/forms/NewExpenseForm";
 
 const categoryIcons = {
   "Alimentación": Utensils,
@@ -41,9 +33,7 @@ const Transactions = () => {
   const [transactions] = useState(mockTransactions);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
 
-  const handleAddExpense = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    toast.success("Gasto registrado exitosamente");
+  const handleFormSuccess = () => {
     setIsDialogOpen(false);
   };
 
@@ -65,74 +55,14 @@ const Transactions = () => {
                 Nuevo Gasto
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[500px]">
+            <DialogContent className="sm:max-w-[550px] max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Registrar Nuevo Gasto</DialogTitle>
                 <DialogDescription>
-                  Completa los detalles de tu gasto
+                  Completa los detalles de tu transacción
                 </DialogDescription>
               </DialogHeader>
-              <form onSubmit={handleAddExpense} className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="amount">Monto</Label>
-                  <Input
-                    id="amount"
-                    type="number"
-                    step="0.01"
-                    placeholder="0.00"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="description">Descripción</Label>
-                  <Input
-                    id="description"
-                    placeholder="Ej: Supermercado"
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="category">Categoría</Label>
-                  <Select required>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecciona una categoría" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="alimentacion">Alimentación</SelectItem>
-                      <SelectItem value="transporte">Transporte</SelectItem>
-                      <SelectItem value="vivienda">Vivienda</SelectItem>
-                      <SelectItem value="ocio">Ocio</SelectItem>
-                      <SelectItem value="salud">Salud</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="method">Método de Pago</Label>
-                  <Select required>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Selecciona método" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="efectivo">Efectivo</SelectItem>
-                      <SelectItem value="debito">Débito</SelectItem>
-                      <SelectItem value="credito">Crédito</SelectItem>
-                      <SelectItem value="transferencia">Transferencia</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="date">Fecha</Label>
-                  <Input
-                    id="date"
-                    type="date"
-                    defaultValue={new Date().toISOString().split('T')[0]}
-                    required
-                  />
-                </div>
-                <Button type="submit" className="w-full bg-gradient-primary">
-                  Guardar Gasto
-                </Button>
-              </form>
+              <NewExpenseForm onSuccess={handleFormSuccess} />
             </DialogContent>
           </Dialog>
         </div>
