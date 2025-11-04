@@ -19,9 +19,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
+import { TrendingDown, TrendingUp } from "lucide-react";
+import { useState } from "react";
 
-const expenseSchema = z.object({
+const transactionSchema = z.object({
+  type: z.enum(["expense", "income"]),
   amount: z.string()
     .min(1, "El monto es requerido")
     .refine((val) => !isNaN(Number(val)) && Number(val) > 0, {
@@ -37,16 +41,41 @@ const expenseSchema = z.object({
   notes: z.string().max(500, "Las notas deben tener menos de 500 caracteres").optional(),
 });
 
-type ExpenseFormValues = z.infer<typeof expenseSchema>;
+type TransactionFormValues = z.infer<typeof transactionSchema>;
 
-interface NewExpenseFormProps {
+interface NewTransactionFormProps {
   onSuccess?: () => void;
+  defaultType?: "expense" | "income";
 }
 
-export function NewExpenseForm({ onSuccess }: NewExpenseFormProps) {
-  const form = useForm<ExpenseFormValues>({
-    resolver: zodResolver(expenseSchema),
+const expenseCategories = [
+  { value: "alimentacion", label: "🍽️ Alimentación" },
+  { value: "transporte", label: "🚗 Transporte" },
+  { value: "vivienda", label: "🏠 Vivienda" },
+  { value: "ocio", label: "🎮 Ocio" },
+  { value: "salud", label: "⚕️ Salud" },
+  { value: "educacion", label: "📚 Educación" },
+  { value: "servicios", label: "💡 Servicios" },
+  { value: "otros", label: "📦 Otros" },
+];
+
+const incomeCategories = [
+  { value: "salario", label: "💼 Salario" },
+  { value: "freelance", label: "💻 Freelance" },
+  { value: "inversion", label: "📈 Inversión" },
+  { value: "regalo", label: "🎁 Regalo" },
+  { value: "venta", label: "🏷️ Venta" },
+  { value: "reembolso", label: "💰 Reembolso" },
+  { value: "otros", label: "📦 Otros" },
+];
+
+export function NewTransactionForm({ onSuccess, defaultType = "expense" }: NewTransactionFormProps) {
+  const [transactionType, setTransactionType] = useState<"expense" | "income">(defaultType);
+
+  const form = useForm<TransactionFormValues>({
+    resolver: zodResolver(transactionSchema),
     defaultValues: {
+      type: defaultType,
       amount: "",
       description: "",
       category: "",
@@ -56,21 +85,51 @@ export function NewExpenseForm({ onSuccess }: NewExpenseFormProps) {
     },
   });
 
-  const onSubmit = (data: ExpenseFormValues) => {
-    console.log("Expense data:", data);
+  const onSubmit = (data: TransactionFormValues) => {
+    console.log("Transaction data:", data);
     
-    // Aquí se integraría con Lovable Cloud para guardar en la base de datos
-    toast.success("Gasto registrado exitosamente", {
+    const typeLabel = data.type === "expense" ? "Gasto" : "Ingreso";
+    toast.success(`${typeLabel} registrado exitosamente`, {
       description: `${data.description} - $${data.amount}`,
     });
     
-    form.reset();
+    form.reset({
+      type: transactionType,
+      amount: "",
+      description: "",
+      category: "",
+      paymentMethod: "",
+      date: new Date().toISOString().split('T')[0],
+      notes: "",
+    });
     onSuccess?.();
   };
+
+  const handleTypeChange = (value: string) => {
+    const newType = value as "expense" | "income";
+    setTransactionType(newType);
+    form.setValue("type", newType);
+    form.setValue("category", "");
+  };
+
+  const categories = transactionType === "expense" ? expenseCategories : incomeCategories;
 
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <Tabs value={transactionType} onValueChange={handleTypeChange} className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="expense" className="gap-2">
+              <TrendingDown className="h-4 w-4" />
+              Gasto
+            </TabsTrigger>
+            <TabsTrigger value="income" className="gap-2">
+              <TrendingUp className="h-4 w-4" />
+              Ingreso
+            </TabsTrigger>
+          </TabsList>
+        </Tabs>
+
         <FormField
           control={form.control}
           name="amount"
@@ -103,7 +162,10 @@ export function NewExpenseForm({ onSuccess }: NewExpenseFormProps) {
             <FormItem>
               <FormLabel>Descripción *</FormLabel>
               <FormControl>
-                <Input placeholder="Ej: Supermercado del mes" {...field} />
+                <Input 
+                  placeholder={transactionType === "expense" ? "Ej: Supermercado del mes" : "Ej: Pago de salario"} 
+                  {...field} 
+                />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -116,21 +178,18 @@ export function NewExpenseForm({ onSuccess }: NewExpenseFormProps) {
           render={({ field }) => (
             <FormItem>
               <FormLabel>Categoría *</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
+              <Select onValueChange={field.onChange} value={field.value}>
                 <FormControl>
                   <SelectTrigger>
                     <SelectValue placeholder="Selecciona una categoría" />
                   </SelectTrigger>
                 </FormControl>
                 <SelectContent>
-                  <SelectItem value="alimentacion">🍽️ Alimentación</SelectItem>
-                  <SelectItem value="transporte">🚗 Transporte</SelectItem>
-                  <SelectItem value="vivienda">🏠 Vivienda</SelectItem>
-                  <SelectItem value="ocio">🎮 Ocio</SelectItem>
-                  <SelectItem value="salud">⚕️ Salud</SelectItem>
-                  <SelectItem value="educacion">📚 Educación</SelectItem>
-                  <SelectItem value="servicios">💡 Servicios</SelectItem>
-                  <SelectItem value="otros">📦 Otros</SelectItem>
+                  {categories.map((cat) => (
+                    <SelectItem key={cat.value} value={cat.value}>
+                      {cat.label}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <FormMessage />
@@ -144,7 +203,7 @@ export function NewExpenseForm({ onSuccess }: NewExpenseFormProps) {
           render={({ field }) => (
             <FormItem>
               <FormLabel>Método de Pago *</FormLabel>
-              <Select onValueChange={field.onChange} defaultValue={field.value}>
+              <Select onValueChange={field.onChange} value={field.value}>
                 <FormControl>
                   <SelectTrigger>
                     <SelectValue placeholder="Selecciona método de pago" />
@@ -195,15 +254,17 @@ export function NewExpenseForm({ onSuccess }: NewExpenseFormProps) {
           )}
         />
 
-        <div className="flex gap-3 pt-4">
-          <Button
-            type="submit"
-            className="flex-1 bg-gradient-primary shadow-lg hover:opacity-90"
-            disabled={form.formState.isSubmitting}
-          >
-            {form.formState.isSubmitting ? "Guardando..." : "Guardar Gasto"}
-          </Button>
-        </div>
+        <Button
+          type="submit"
+          className="w-full bg-gradient-primary shadow-lg hover:opacity-90"
+          disabled={form.formState.isSubmitting}
+        >
+          {form.formState.isSubmitting 
+            ? "Guardando..." 
+            : transactionType === "expense" 
+              ? "Guardar Gasto" 
+              : "Guardar Ingreso"}
+        </Button>
       </form>
     </Form>
   );
