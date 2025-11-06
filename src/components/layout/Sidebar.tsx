@@ -2,7 +2,8 @@ import { Link, useLocation } from "react-router-dom";
 import { 
   LayoutDashboard, 
   PlusCircle, 
-  Tag, 
+  Tag,
+  Wallet, 
   TrendingUp, 
   Target,
   Receipt,
@@ -12,10 +13,9 @@ import { cn } from "@/lib/utils";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
-  { icon: PlusCircle, label: "Nuevo Gasto", path: "/nuevo-gasto" },
   { icon: Receipt, label: "Transacciones", path: "/transacciones" },
   { icon: Tag, label: "Categorías", path: "/categorias" },
-  { icon: TrendingUp, label: "Análisis", path: "/analisis" },
+  { icon: Wallet, label: "Tarjetas", path: "/tarjetas" },
   { icon: Target, label: "Metas", path: "/metas" },
 ];
 

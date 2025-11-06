@@ -1,7 +1,7 @@
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { collection, addDoc, serverTimestamp, doc, updateDoc, increment, query, onSnapshot } from 'firebase/firestore';
+import { doc, updateDoc, collection, query, where, onSnapshot, getDocs, increment } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { Button } from "@/components/ui/button";
 import {
@@ -23,9 +23,8 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { TrendingDown, TrendingUp, Repeat } from "lucide-react";
+import { TrendingDown, TrendingUp } from "lucide-react";
 import { useState, useEffect } from "react";
-import { Switch } from "@/components/ui/switch";
 
 const transactionSchema = z.object({
   type: z.enum(["expense", "income"]),
@@ -43,21 +42,21 @@ const transactionSchema = z.object({
   cardId: z.string().optional(),
   date: z.string().min(1, "La fecha es requerida"),
   notes: z.string().max(500, "Las notas deben tener menos de 500 caracteres").optional(),
-  isRecurring: z.boolean().default(false),
-  recurringPaymentDate: z.string().optional(),
-  recurringFrequency: z.enum(["semanal", "quincenal", "mensual", "anual"]).optional(),
-  recurringActive: z.boolean().default(true),
-}).refine((data) => {
-  if (data.isRecurring) {
-    return data.recurringPaymentDate && data.recurringFrequency;
-  }
-  return true;
-}, {
-  message: "Completa todos los campos de recurrencia",
-  path: ["recurringFrequency"],
 });
 
 type TransactionFormValues = z.infer<typeof transactionSchema>;
+
+interface Transaction {
+  id: string;
+  description: string;
+  amount: number;
+  category: string;
+  date: string;
+  paymentMethod: string;
+  type: "expense" | "income";
+  notes?: string;
+  cardId?: string;
+}
 
 interface Card {
   id: string;
@@ -67,9 +66,9 @@ interface Card {
   currentBalance?: number;
 }
 
-interface NewTransactionFormProps {
+interface EditTransactionFormProps {
+  transaction: Transaction;
   onSuccess?: () => void;
-  defaultType?: "expense" | "income";
 }
 
 const expenseCategories = [
@@ -93,40 +92,28 @@ const incomeCategories = [
   { value: "otros", label: "📦 Otros" },
 ];
 
-const frequencyOptions = [
-  { value: "semanal", label: "📅 Semanal" },
-  { value: "quincenal", label: "📅 Quincenal (cada 15 días)" },
-  { value: "mensual", label: "📅 Mensual" },
-  { value: "anual", label: "📅 Anual" },
-];
-
-export function NewTransactionForm({ onSuccess, defaultType = "expense" }: NewTransactionFormProps) {
-  const [transactionType, setTransactionType] = useState<"expense" | "income">(defaultType);
+export function EditTransactionForm({ transaction, onSuccess }: EditTransactionFormProps) {
+  const [transactionType, setTransactionType] = useState<"expense" | "income">(transaction.type);
   const [cards, setCards] = useState<Card[]>([]);
   const [loadingCards, setLoadingCards] = useState(true);
 
   const form = useForm<TransactionFormValues>({
     resolver: zodResolver(transactionSchema),
     defaultValues: {
-      type: defaultType,
-      amount: "",
-      description: "",
-      category: "",
-      paymentMethod: "",
-      cardId: "",
-      date: new Date().toISOString().split('T')[0],
-      notes: "",
-      isRecurring: false,
-      recurringPaymentDate: "",
-      recurringFrequency: undefined,
-      recurringActive: true,
+      type: transaction.type,
+      amount: transaction.amount.toString(),
+      description: transaction.description,
+      category: transaction.category,
+      paymentMethod: transaction.paymentMethod,
+      cardId: transaction.cardId || "",
+      date: transaction.date,
+      notes: transaction.notes || "",
     },
   });
 
   const paymentMethod = form.watch("paymentMethod");
-  const isRecurring = form.watch("isRecurring");
 
-  // Cargar tarjetas desde Firestore
+  // Cargar tarjetas
   useEffect(() => {
     const q = query(collection(db, 'tarjetas'));
     
@@ -144,61 +131,64 @@ export function NewTransactionForm({ onSuccess, defaultType = "expense" }: NewTr
 
   const onSubmit = async (data: TransactionFormValues) => {
     try {
-      const amount = parseFloat(data.amount);
-      
-      // Si es un gasto con tarjeta, actualizar el saldo de la tarjeta
-      if (data.type === "expense" && data.cardId && (data.paymentMethod === "credito" || data.paymentMethod === "debito")) {
+      const newAmount = parseFloat(data.amount);
+      const oldAmount = transaction.amount;
+      const amountDifference = newAmount - oldAmount;
+
+      // Si cambió la tarjeta o el monto, actualizamos los saldos
+      if (transaction.cardId && transaction.cardId !== data.cardId) {
+        // Revertir el cargo de la tarjeta anterior
+        const oldCardRef = doc(db, 'tarjetas', transaction.cardId);
+        if (transaction.type === "expense") {
+          await updateDoc(oldCardRef, {
+            currentBalance: increment(-oldAmount)
+          });
+        }
+      }
+
+      // Actualizar la nueva tarjeta si aplica
+      if (data.cardId && (data.paymentMethod === "credito" || data.paymentMethod === "debito")) {
         const cardRef = doc(db, 'tarjetas', data.cardId);
-        await updateDoc(cardRef, {
-          currentBalance: increment(amount)
-        });
+        
+        if (data.type === "expense") {
+          // Si es la misma tarjeta, solo sumamos la diferencia
+          if (transaction.cardId === data.cardId) {
+            await updateDoc(cardRef, {
+              currentBalance: increment(amountDifference)
+            });
+          } else {
+            // Si es tarjeta nueva, sumamos el monto completo
+            await updateDoc(cardRef, {
+              currentBalance: increment(newAmount)
+            });
+          }
+        }
       }
 
       const transactionData = {
         type: data.type,
-        amount: amount,
+        amount: newAmount,
         description: data.description,
         category: data.category,
         paymentMethod: data.paymentMethod,
         cardId: data.cardId || null,
         date: data.date,
         notes: data.notes || "",
-        isRecurring: data.isRecurring,
-        recurringPaymentDate: data.isRecurring ? data.recurringPaymentDate : null,
-        recurringFrequency: data.isRecurring ? data.recurringFrequency : null,
-        recurringActive: data.isRecurring ? data.recurringActive : null,
-        createdAt: serverTimestamp(),
-        timestamp: Date.now()
       };
       
-      // Guardar en Firestore
-      await addDoc(collection(db, 'transacciones'), transactionData);
+      // Actualizar en Firestore
+      const transactionRef = doc(db, 'transacciones', transaction.id);
+      await updateDoc(transactionRef, transactionData);
       
       const typeLabel = data.type === "expense" ? "Gasto" : "Ingreso";
-      const recurringLabel = data.isRecurring ? " recurrente" : "";
-      toast.success(`${typeLabel}${recurringLabel} registrado exitosamente`, {
+      toast.success(`${typeLabel} actualizado exitosamente`, {
         description: `${data.description} - $${data.amount}`,
-      });
-      
-      form.reset({
-        type: transactionType,
-        amount: "",
-        description: "",
-        category: "",
-        paymentMethod: "",
-        cardId: "",
-        date: new Date().toISOString().split('T')[0],
-        notes: "",
-        isRecurring: false,
-        recurringPaymentDate: "",
-        recurringFrequency: undefined,
-        recurringActive: true,
       });
       
       onSuccess?.();
     } catch (error) {
-      console.error("Error al guardar la transacción:", error);
-      toast.error("Error al guardar la transacción", {
+      console.error("Error al actualizar la transacción:", error);
+      toast.error("Error al actualizar la transacción", {
         description: "Inténtalo de nuevo más tarde",
       });
     }
@@ -391,101 +381,6 @@ export function NewTransactionForm({ onSuccess, defaultType = "expense" }: NewTr
           )}
         />
 
-        {/* Toggle para transacción recurrente */}
-        <FormField
-          control={form.control}
-          name="isRecurring"
-          render={({ field }) => (
-            <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 bg-muted/50">
-              <div className="space-y-0.5">
-                <FormLabel className="text-base flex items-center gap-2">
-                  <Repeat className="h-4 w-4" />
-                  Transacción Recurrente
-                </FormLabel>
-                <div className="text-sm text-muted-foreground">
-                  Programa pagos o ingresos automáticos
-                </div>
-              </div>
-              <FormControl>
-                <Switch
-                  checked={field.value}
-                  onCheckedChange={field.onChange}
-                />
-              </FormControl>
-            </FormItem>
-          )}
-        />
-
-        {/* Campos adicionales para transacciones recurrentes */}
-        {isRecurring && (
-          <div className="space-y-4 rounded-lg border p-4 bg-muted/30">
-            <h3 className="font-semibold text-sm flex items-center gap-2">
-              <Repeat className="h-4 w-4" />
-              Configuración de Recurrencia
-            </h3>
-
-            <FormField
-              control={form.control}
-              name="recurringPaymentDate"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Fecha de Pago *</FormLabel>
-                  <FormControl>
-                    <Input type="date" {...field} />
-                  </FormControl>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="recurringFrequency"
-              render={({ field }) => (
-                <FormItem>
-                  <FormLabel>Frecuencia *</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value}>
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Selecciona la frecuencia" />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {frequencyOptions.map((freq) => (
-                        <SelectItem key={freq.value} value={freq.value}>
-                          {freq.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
-
-            <FormField
-              control={form.control}
-              name="recurringActive"
-              render={({ field }) => (
-                <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
-                  <div className="space-y-0.5">
-                    <FormLabel className="text-sm">Estado Activo</FormLabel>
-                    <div className="text-xs text-muted-foreground">
-                      La transacción se procesará automáticamente
-                    </div>
-                  </div>
-                  <FormControl>
-                    <Switch
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                    />
-                  </FormControl>
-                </FormItem>
-              )}
-            />
-          </div>
-        )}
-
         <FormField
           control={form.control}
           name="notes"
@@ -510,7 +405,7 @@ export function NewTransactionForm({ onSuccess, defaultType = "expense" }: NewTr
           className="w-full bg-gradient-primary shadow-lg hover:opacity-90"
           disabled={form.formState.isSubmitting}
         >
-          {form.formState.isSubmitting ? "Guardando..." : "Guardar"}
+          {form.formState.isSubmitting ? "Actualizando..." : "Actualizar"}
         </Button>
       </form>
     </Form>

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { collection, query, onSnapshot, orderBy, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,10 +13,25 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { 
-  PlusCircle, 
   Search, 
   Filter, 
   ShoppingBag, 
@@ -24,52 +41,181 @@ import {
   TrendingDown,
   TrendingUp,
   Briefcase,
-  DollarSign
+  DollarSign,
+  Heart,
+  GraduationCap,
+  Lightbulb,
+  Package,
+  Laptop,
+  TrendingUpIcon,
+  Gift,
+  TagIcon,
+  Wallet,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Repeat,
+  Clock,
+  CheckCircle2,
+  XCircle
 } from "lucide-react";
 import { NewTransactionForm } from "@/components/forms/NewTransactionForm";
+import { EditTransactionForm } from "@/components/forms/EditTransactionForm";
+import { toast } from "sonner";
 
 const categoryIcons: Record<string, any> = {
-  "Alimentación": Utensils,
-  "Transporte": Car,
-  "Vivienda": Home,
-  "Ocio": ShoppingBag,
-  "Salario": Briefcase,
-  "Freelance": DollarSign,
+  // Gastos
+  "alimentacion": Utensils,
+  "transporte": Car,
+  "vivienda": Home,
+  "ocio": ShoppingBag,
+  "salud": Heart,
+  "educacion": GraduationCap,
+  "servicios": Lightbulb,
+  "otros": Package,
+  // Ingresos
+  "salario": Briefcase,
+  "freelance": Laptop,
+  "inversion": TrendingUpIcon,
+  "regalo": Gift,
+  "venta": TagIcon,
+  "reembolso": Wallet,
 };
 
 interface Transaction {
-  id: number;
+  id: string;
   description: string;
   amount: number;
   category: string;
   date: string;
-  method: string;
+  paymentMethod: string;
   type: "expense" | "income";
+  notes?: string;
+  isRecurring?: boolean;
+  recurringPaymentDate?: string;
+  recurringFrequency?: "semanal" | "quincenal" | "mensual" | "anual";
+  recurringActive?: boolean;
+  createdAt: any;
 }
 
-const mockTransactions: Transaction[] = [
-  { id: 1, description: "Supermercado", amount: 85.50, category: "Alimentación", date: "2024-11-20", method: "Débito", type: "expense" },
-  { id: 2, description: "Salario mensual", amount: 3000.00, category: "Salario", date: "2024-11-20", method: "Transferencia", type: "income" },
-  { id: 3, description: "Gasolina", amount: 45.00, category: "Transporte", date: "2024-11-19", method: "Efectivo", type: "expense" },
-  { id: 4, description: "Proyecto freelance", amount: 500.00, category: "Freelance", date: "2024-11-18", method: "Transferencia", type: "income" },
-  { id: 5, description: "Alquiler", amount: 800.00, category: "Vivienda", date: "2024-11-15", method: "Transferencia", type: "expense" },
-  { id: 6, description: "Cine", amount: 25.00, category: "Ocio", date: "2024-11-18", method: "Crédito", type: "expense" },
-];
+const frequencyLabels: Record<string, string> = {
+  semanal: "Semanal",
+  quincenal: "Quincenal",
+  mensual: "Mensual",
+  anual: "Anual",
+};
 
 const Transactions = () => {
-  const [transactions] = useState(mockTransactions);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [dialogType, setDialogType] = useState<"expense" | "income">("expense");
+  const [selectedTransaction, setSelectedTransaction] = useState<Transaction | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("all");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Cargar transacciones desde Firestore en tiempo real
+  useEffect(() => {
+    const q = query(
+      collection(db, 'transacciones'),
+      orderBy('timestamp', 'desc')
+    );
+
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => {
+        const transactionsData = snapshot.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data()
+        } as Transaction));
+        
+        setTransactions(transactionsData);
+        setLoading(false);
+      },
+      (error) => {
+        console.error("Error al cargar transacciones:", error);
+        toast.error("Error al cargar las transacciones");
+        setLoading(false);
+      }
+    );
+
+    return () => unsubscribe();
+  }, []);
+
+  const calculateNextPayment = (paymentDate: string, frequency: string): string => {
+    const date = new Date(paymentDate);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    
+    // Si la fecha ya pasó, calcular la siguiente
+    while (date < today) {
+      switch (frequency) {
+        case 'semanal':
+          date.setDate(date.getDate() + 7);
+          break;
+        case 'quincenal':
+          date.setDate(date.getDate() + 15);
+          break;
+        case 'mensual':
+          date.setMonth(date.getMonth() + 1);
+          break;
+        case 'anual':
+          date.setFullYear(date.getFullYear() + 1);
+          break;
+      }
+    }
+    
+    return date.toLocaleDateString('es-ES', { 
+      day: 'numeric', 
+      month: 'short',
+      year: 'numeric'
+    });
+  };
+
   const handleFormSuccess = () => {
     setIsDialogOpen(false);
+    toast.success("¡Transacción guardada correctamente!");
+  };
+
+  const handleEditSuccess = () => {
+    setIsEditDialogOpen(false);
+    setSelectedTransaction(null);
+    toast.success("¡Transacción actualizada correctamente!");
   };
 
   const openDialog = (type: "expense" | "income") => {
     setDialogType(type);
     setIsDialogOpen(true);
+  };
+
+  const openEditDialog = (transaction: Transaction) => {
+    setSelectedTransaction(transaction);
+    setIsEditDialogOpen(true);
+  };
+
+  const openDeleteDialog = (transaction: Transaction) => {
+    setSelectedTransaction(transaction);
+    setIsDeleteDialogOpen(true);
+  };
+
+  const handleDelete = async () => {
+    if (!selectedTransaction) return;
+
+    setDeletingId(selectedTransaction.id);
+    
+    try {
+      await deleteDoc(doc(db, 'transacciones', selectedTransaction.id));
+      toast.success("Transacción eliminada correctamente");
+      setIsDeleteDialogOpen(false);
+      setSelectedTransaction(null);
+    } catch (error) {
+      console.error("Error al eliminar transacción:", error);
+      toast.error("Error al eliminar la transacción");
+    } finally {
+      setDeletingId(null);
+    }
   };
 
   const filteredTransactions = transactions.filter((transaction) => {
@@ -95,6 +241,58 @@ const Transactions = () => {
 
   const balance = totalIncome - totalExpenses;
 
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('es-ES', { 
+      day: '2-digit', 
+      month: '2-digit', 
+      year: 'numeric' 
+    });
+  };
+
+  const getCategoryLabel = (category: string) => {
+    const categoryMap: Record<string, string> = {
+      "alimentacion": "Alimentación",
+      "transporte": "Transporte",
+      "vivienda": "Vivienda",
+      "ocio": "Ocio",
+      "salud": "Salud",
+      "educacion": "Educación",
+      "servicios": "Servicios",
+      "salario": "Salario",
+      "freelance": "Freelance",
+      "inversion": "Inversión",
+      "regalo": "Regalo",
+      "venta": "Venta",
+      "reembolso": "Reembolso",
+      "otros": "Otros"
+    };
+    return categoryMap[category] || category;
+  };
+
+  const getPaymentMethodLabel = (method: string) => {
+    const methodMap: Record<string, string> = {
+      "efectivo": "Efectivo",
+      "debito": "Débito",
+      "credito": "Crédito",
+      "transferencia": "Transferencia"
+    };
+    return methodMap[method] || method;
+  };
+
+  if (loading) {
+    return (
+      <MainLayout>
+        <div className="flex items-center justify-center h-96">
+          <div className="text-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+            <p className="text-muted-foreground">Cargando transacciones...</p>
+          </div>
+        </div>
+      </MainLayout>
+    );
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -108,19 +306,10 @@ const Transactions = () => {
           </div>
           <div className="flex gap-2">
             <Button 
-              onClick={() => openDialog("expense")}
-              variant="outline"
-              className="gap-2 border-destructive/50 text-destructive hover:bg-destructive/10"
-            >
-              <TrendingDown className="h-5 w-5" />
-              Gasto
-            </Button>
-            <Button 
               onClick={() => openDialog("income")}
               className="gap-2 bg-gradient-primary shadow-lg hover:opacity-90"
             >
-              <TrendingUp className="h-5 w-5" />
-              Ingreso
+              Registrar
             </Button>
           </div>
         </div>
@@ -215,44 +404,112 @@ const Transactions = () => {
               <div className="divide-y divide-border">
                 {filteredTransactions.length === 0 ? (
                   <div className="p-8 text-center text-muted-foreground">
-                    No se encontraron transacciones
+                    {transactions.length === 0 
+                      ? "No hay transacciones registradas. ¡Comienza agregando una!" 
+                      : "No se encontraron transacciones con esos criterios"}
                   </div>
                 ) : (
                   filteredTransactions.map((transaction) => {
-                    const Icon = categoryIcons[transaction.category] || ShoppingBag;
+                    const Icon = categoryIcons[transaction.category] || Package;
                     const isIncome = transaction.type === "income";
                     
                     return (
                       <div
                         key={transaction.id}
-                        className="flex items-center justify-between p-4 transition-colors hover:bg-secondary/50"
+                        className="flex items-start justify-between p-4 transition-colors hover:bg-secondary/50"
                       >
-                        <div className="flex items-center gap-4">
-                          <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${
+                        <div className="flex items-start gap-4 flex-1 min-w-0">
+                          <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${
                             isIncome ? 'bg-emerald-500/10' : 'bg-primary/10'
                           }`}>
                             <Icon className={`h-6 w-6 ${isIncome ? 'text-emerald-600' : 'text-primary'}`} />
                           </div>
-                          <div>
-                            <p className="font-medium text-foreground">{transaction.description}</p>
-                            <div className="mt-1 flex gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <p className="font-medium text-foreground truncate">{transaction.description}</p>
+                              {transaction.isRecurring && (
+                                <Badge variant="secondary" className="shrink-0 gap-1 text-xs">
+                                  <Repeat className="h-3 w-3" />
+                                  Recurrente
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
                               <Badge 
                                 variant="outline" 
                                 className={isIncome ? 'border-emerald-600/50 text-emerald-600' : ''}
                               >
-                                {transaction.category}
+                                {getCategoryLabel(transaction.category)}
                               </Badge>
-                              <span className="text-sm text-muted-foreground">{transaction.date}</span>
+                              <span className="text-sm text-muted-foreground">
+                                {formatDate(transaction.date)}
+                              </span>
                             </div>
+
+                            {/* Información de recurrencia */}
+                            {transaction.isRecurring && transaction.recurringPaymentDate && transaction.recurringFrequency && (
+                              <div className="mt-2 pt-2 border-t space-y-1">
+                                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                  <Clock className="h-3 w-3" />
+                                  <span>Próximo pago: {calculateNextPayment(transaction.recurringPaymentDate, transaction.recurringFrequency)}</span>
+                                </div>
+                                <div className="flex items-center gap-2 text-xs">
+                                  <span className="text-muted-foreground">
+                                    Frecuencia: {frequencyLabels[transaction.recurringFrequency]}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  {transaction.recurringActive ? (
+                                    <Badge variant="default" className="gap-1 bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 text-xs">
+                                      <CheckCircle2 className="h-3 w-3" />
+                                      Activo
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="secondary" className="gap-1 text-xs">
+                                      <XCircle className="h-3 w-3" />
+                                      Inactivo
+                                    </Badge>
+                                  )}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
-                        <div className="text-right">
-                          <p className={`text-xl font-bold ${
-                            isIncome ? 'text-emerald-600' : 'text-destructive'
-                          }`}>
-                            {isIncome ? '+' : '-'}${transaction.amount.toFixed(2)}
-                          </p>
-                          <p className="text-sm text-muted-foreground">{transaction.method}</p>
+                        
+                        <div className="flex items-start gap-4 ml-4 shrink-0">
+                          <div className="text-right">
+                            <p className={`text-xl font-bold ${
+                              isIncome ? 'text-emerald-600' : 'text-destructive'
+                            }`}>
+                              {isIncome ? '+' : '-'}${transaction.amount.toFixed(2)}
+                            </p>
+                            <p className="text-sm text-muted-foreground">
+                              {getPaymentMethodLabel(transaction.paymentMethod)}
+                            </p>
+                          </div>
+                          
+                          {/* Dropdown Menu */}
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button variant="ghost" size="icon" className="h-8 w-8">
+                                <MoreVertical className="h-4 w-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => openEditDialog(transaction)}>
+                                <Pencil className="mr-2 h-4 w-4" />
+                                Editar
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem 
+                                onClick={() => openDeleteDialog(transaction)}
+                                className="text-destructive focus:text-destructive"
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" />
+                                Eliminar
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
                         </div>
                       </div>
                     );
@@ -263,15 +520,15 @@ const Transactions = () => {
           </Tabs>
         </Card>
 
-        {/* Dialog */}
+        {/* New Transaction Dialog */}
         <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <DialogContent className="sm:max-w-[550px] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
-                Registrar {dialogType === "expense" ? "Gasto" : "Ingreso"}
+                Registrar transacción
               </DialogTitle>
               <DialogDescription>
-                Completa los detalles de tu {dialogType === "expense" ? "gasto" : "ingreso"}
+                Completa los detalles de tu transacción
               </DialogDescription>
             </DialogHeader>
             <NewTransactionForm 
@@ -280,6 +537,51 @@ const Transactions = () => {
             />
           </DialogContent>
         </Dialog>
+
+        {/* Edit Transaction Dialog */}
+        <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
+          <DialogContent className="sm:max-w-[550px] max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                Editar transacción
+              </DialogTitle>
+              <DialogDescription>
+                Modifica los detalles de tu transacción
+              </DialogDescription>
+            </DialogHeader>
+            {selectedTransaction && (
+              <EditTransactionForm 
+                transaction={selectedTransaction}
+                onSuccess={handleEditSuccess}
+              />
+            )}
+          </DialogContent>
+        </Dialog>
+
+        {/* Delete Confirmation Dialog */}
+        <AlertDialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>¿Estás seguro?</AlertDialogTitle>
+              <AlertDialogDescription>
+                Esta acción no se puede deshacer. Se eliminará permanentemente la transacción
+                {selectedTransaction && (
+                  <span className="font-semibold"> "{selectedTransaction.description}"</span>
+                )}.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancelar</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={handleDelete}
+                className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                disabled={!!deletingId}
+              >
+                {deletingId ? "Eliminando..." : "Eliminar"}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
     </MainLayout>
   );
