@@ -231,7 +231,7 @@ export function NewTransactionForm({ onSuccess, defaultType = "expense" }: NewTr
   return (
     <Form {...form}>
       <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-        <Tabs value={transactionType} onValueChange={handleTypeChange} className="w-full">
+        <Tabs value={transactionType} onValueChange={handleTypeChange} className="w-full" defaultValue={defaultType}>
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="expense" className="gap-2">
               <TrendingDown className="h-4 w-4" />

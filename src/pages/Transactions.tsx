@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { collection, query, onSnapshot, orderBy, doc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, query, onSnapshot, orderBy, doc, deleteDoc, updateDoc, increment } from 'firebase/firestore';
 import { db } from '@/lib/firebase';
 import { MainLayout } from "@/components/layout/MainLayout";
 import { Card } from "@/components/ui/card";
@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { 
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -31,12 +31,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { 
-  Search, 
-  Filter, 
-  ShoppingBag, 
-  Car, 
-  Home, 
+import {
+  Search,
+  Filter,
+  ShoppingBag,
+  Car,
+  Home,
   Utensils,
   TrendingDown,
   TrendingUp,
@@ -91,6 +91,7 @@ interface Transaction {
   paymentMethod: string;
   type: "expense" | "income";
   notes?: string;
+  cardId?: string;
   isRecurring?: boolean;
   recurringPaymentDate?: string;
   recurringFrequency?: "semanal" | "quincenal" | "mensual" | "anual";
@@ -124,13 +125,13 @@ const Transactions = () => {
       orderBy('timestamp', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, 
+    const unsubscribe = onSnapshot(q,
       (snapshot) => {
         const transactionsData = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data()
         } as Transaction));
-        
+
         setTransactions(transactionsData);
         setLoading(false);
       },
@@ -148,7 +149,7 @@ const Transactions = () => {
     const date = new Date(paymentDate);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    
+
     // Si la fecha ya pasó, calcular la siguiente
     while (date < today) {
       switch (frequency) {
@@ -166,9 +167,9 @@ const Transactions = () => {
           break;
       }
     }
-    
-    return date.toLocaleDateString('es-ES', { 
-      day: 'numeric', 
+
+    return date.toLocaleDateString('es-ES', {
+      day: 'numeric',
       month: 'short',
       year: 'numeric'
     });
@@ -204,9 +205,21 @@ const Transactions = () => {
     if (!selectedTransaction) return;
 
     setDeletingId(selectedTransaction.id);
-    
+
     try {
+      // Si la transacción tiene una tarjeta asociada y es un gasto, revertir el cargo
+      if (selectedTransaction.cardId && selectedTransaction.type === "expense" &&
+        (selectedTransaction.paymentMethod === "credito" || selectedTransaction.paymentMethod === "debito")) {
+        const cardRef = doc(db, 'tarjetas', selectedTransaction.cardId);
+        // Restar el monto del saldo (revertir el cargo)
+        await updateDoc(cardRef, {
+          currentBalance: increment(-selectedTransaction.amount)
+        });
+      }
+
+      // Eliminar la transacción
       await deleteDoc(doc(db, 'transacciones', selectedTransaction.id));
+
       toast.success("Transacción eliminada correctamente");
       setIsDeleteDialogOpen(false);
       setSelectedTransaction(null);
@@ -219,15 +232,16 @@ const Transactions = () => {
   };
 
   const filteredTransactions = transactions.filter((transaction) => {
-    const matchesTab = 
-      activeTab === "all" || 
+    const matchesTab =
+      activeTab === "all" ||
       (activeTab === "expenses" && transaction.type === "expense") ||
-      (activeTab === "income" && transaction.type === "income");
-    
-    const matchesSearch = 
+      (activeTab === "income" && transaction.type === "income") ||
+      (activeTab === "recurring" && transaction.isRecurring);
+
+    const matchesSearch =
       transaction.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
       transaction.category.toLowerCase().includes(searchQuery.toLowerCase());
-    
+
     return matchesTab && matchesSearch;
   });
 
@@ -243,10 +257,10 @@ const Transactions = () => {
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
-    return date.toLocaleDateString('es-ES', { 
-      day: '2-digit', 
-      month: '2-digit', 
-      year: 'numeric' 
+    return date.toLocaleDateString('es-ES', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric'
     });
   };
 
@@ -305,7 +319,7 @@ const Transactions = () => {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button 
+            <Button
               onClick={() => openDialog("income")}
               className="gap-2 bg-gradient-primary shadow-lg hover:opacity-90"
             >
@@ -379,23 +393,30 @@ const Transactions = () => {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <div className="border-b px-4">
               <TabsList className="h-12 w-full justify-start rounded-none border-0 bg-transparent p-0">
-                <TabsTrigger 
-                  value="all" 
+                <TabsTrigger
+                  value="all"
                   className="rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent"
                 >
                   Todas ({transactions.length})
                 </TabsTrigger>
-                <TabsTrigger 
+                <TabsTrigger
                   value="income"
                   className="rounded-none border-b-2 border-transparent data-[state=active]:border-emerald-600 data-[state=active]:bg-transparent data-[state=active]:text-emerald-600"
                 >
                   Ingresos ({transactions.filter(t => t.type === "income").length})
                 </TabsTrigger>
-                <TabsTrigger 
+                <TabsTrigger
                   value="expenses"
                   className="rounded-none border-b-2 border-transparent data-[state=active]:border-destructive data-[state=active]:bg-transparent data-[state=active]:text-destructive"
                 >
                   Gastos ({transactions.filter(t => t.type === "expense").length})
+                </TabsTrigger>
+                <TabsTrigger
+                  value="recurring"
+                  className="rounded-none border-b-2 border-transparent data-[state=active]:border-purple-600 data-[state=active]:bg-transparent data-[state=active]:text-purple-600"
+                >
+                  <Repeat className="h-4 w-4 mr-1" />
+                  Recurrentes ({transactions.filter(t => t.isRecurring).length})
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -404,24 +425,23 @@ const Transactions = () => {
               <div className="divide-y divide-border">
                 {filteredTransactions.length === 0 ? (
                   <div className="p-8 text-center text-muted-foreground">
-                    {transactions.length === 0 
-                      ? "No hay transacciones registradas. ¡Comienza agregando una!" 
+                    {transactions.length === 0
+                      ? "No hay transacciones registradas. ¡Comienza agregando una!"
                       : "No se encontraron transacciones con esos criterios"}
                   </div>
                 ) : (
                   filteredTransactions.map((transaction) => {
                     const Icon = categoryIcons[transaction.category] || Package;
                     const isIncome = transaction.type === "income";
-                    
+
                     return (
                       <div
                         key={transaction.id}
                         className="flex items-start justify-between p-4 transition-colors hover:bg-secondary/50"
                       >
                         <div className="flex items-start gap-4 flex-1 min-w-0">
-                          <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${
-                            isIncome ? 'bg-emerald-500/10' : 'bg-primary/10'
-                          }`}>
+                          <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${isIncome ? 'bg-emerald-500/10' : 'bg-primary/10'
+                            }`}>
                             <Icon className={`h-6 w-6 ${isIncome ? 'text-emerald-600' : 'text-primary'}`} />
                           </div>
                           <div className="flex-1 min-w-0">
@@ -435,8 +455,8 @@ const Transactions = () => {
                               )}
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
-                              <Badge 
-                                variant="outline" 
+                              <Badge
+                                variant="outline"
                                 className={isIncome ? 'border-emerald-600/50 text-emerald-600' : ''}
                               >
                                 {getCategoryLabel(transaction.category)}
@@ -475,19 +495,18 @@ const Transactions = () => {
                             )}
                           </div>
                         </div>
-                        
+
                         <div className="flex items-start gap-4 ml-4 shrink-0">
                           <div className="text-right">
-                            <p className={`text-xl font-bold ${
-                              isIncome ? 'text-emerald-600' : 'text-destructive'
-                            }`}>
+                            <p className={`text-xl font-bold ${isIncome ? 'text-emerald-600' : 'text-destructive'
+                              }`}>
                               {isIncome ? '+' : '-'}${transaction.amount.toFixed(2)}
                             </p>
                             <p className="text-sm text-muted-foreground">
                               {getPaymentMethodLabel(transaction.paymentMethod)}
                             </p>
                           </div>
-                          
+
                           {/* Dropdown Menu */}
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -501,7 +520,7 @@ const Transactions = () => {
                                 Editar
                               </DropdownMenuItem>
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem 
+                              <DropdownMenuItem
                                 onClick={() => openDeleteDialog(transaction)}
                                 className="text-destructive focus:text-destructive"
                               >
@@ -531,7 +550,7 @@ const Transactions = () => {
                 Completa los detalles de tu transacción
               </DialogDescription>
             </DialogHeader>
-            <NewTransactionForm 
+            <NewTransactionForm
               onSuccess={handleFormSuccess}
               defaultType={dialogType}
             />
@@ -550,7 +569,7 @@ const Transactions = () => {
               </DialogDescription>
             </DialogHeader>
             {selectedTransaction && (
-              <EditTransactionForm 
+              <EditTransactionForm
                 transaction={selectedTransaction}
                 onSuccess={handleEditSuccess}
               />
@@ -567,6 +586,11 @@ const Transactions = () => {
                 Esta acción no se puede deshacer. Se eliminará permanentemente la transacción
                 {selectedTransaction && (
                   <span className="font-semibold"> "{selectedTransaction.description}"</span>
+                )}
+                {selectedTransaction?.cardId && (
+                  <span className="block mt-2 text-yellow-600">
+                    ⚠️ El cargo de ${selectedTransaction.amount.toFixed(2)} se revertirá en la tarjeta asociada.
+                  </span>
                 )}.
               </AlertDialogDescription>
             </AlertDialogHeader>
