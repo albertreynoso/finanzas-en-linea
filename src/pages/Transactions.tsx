@@ -255,8 +255,9 @@ const Transactions = () => {
 
   const balance = totalIncome - totalExpenses;
 
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
+   const formatDate = (dateString: string) => {
+    // Añadir 'T00:00:00' para forzar interpretación en zona horaria local
+    const date = new Date(dateString + 'T00:00:00');
     return date.toLocaleDateString('es-ES', {
       day: '2-digit',
       month: '2-digit',

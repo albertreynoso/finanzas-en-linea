@@ -47,13 +47,12 @@ import {
   DollarSign,
   TrendingUp,
   Wallet,
-  Activity,
-  CalendarDays
+  Activity
 } from "lucide-react";
 import { NewCardForm } from "@/components/forms/NewCardForm";
 import { EditCardForm } from "@/components/forms/EditCardForm";
 import { toast } from "sonner";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, ReferenceArea } from 'recharts';
 
 interface CreditCardData {
   id: string;
@@ -90,9 +89,8 @@ const Cards = () => {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   
-  // Estados para selector de fecha
-  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
-  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  // Estado para tarjeta seleccionada en el gráfico
+  const [selectedCardForChart, setSelectedCardForChart] = useState<CreditCardData | null>(null);
 
   // Cargar tarjetas desde Firestore
   useEffect(() => {
@@ -135,6 +133,14 @@ const Cards = () => {
 
     return () => unsubscribe();
   }, []);
+
+  // Inicializar tarjeta seleccionada cuando las tarjetas se cargan
+  useEffect(() => {
+    if (cards.length > 0 && !selectedCardForChart) {
+      const firstCreditCard = cards.find(c => c.cardType === "credito");
+      setSelectedCardForChart(firstCreditCard || cards[0]);
+    }
+  }, [cards, selectedCardForChart]);
 
   const handleFormSuccess = () => {
     setIsDialogOpen(false);
@@ -195,112 +201,92 @@ const Cards = () => {
     .reduce((sum, c) => sum + (c.currentBalance || 0), 0);
   const availableCredit = totalCreditLimit - totalCurrentBalance;
 
-  // Obtener días del mes seleccionado
-  const getDaysInMonth = (month: number, year: number) => {
-    return new Date(year, month + 1, 0).getDate();
-  };
-
-  // Preparar datos para el gráfico
+  // Preparar datos para el gráfico (vista de -30 a +30 días)
   const prepareChartData = () => {
-    const daysInMonth = getDaysInMonth(selectedMonth, selectedYear);
-
-    // Crear array con todos los días del mes
-    const chartData = [];
-    for (let day = 1; day <= daysInMonth; day++) {
-      const dataPoint: any = { day: day.toString() };
+    if (!selectedCardForChart) return [];
+    
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const data = [];
+    
+    // Encontrar el inicio del período de facturación actual
+    const findCurrentBillingDate = () => {
+      let billingDate = new Date(today.getFullYear(), today.getMonth(), selectedCardForChart.billingDate);
+      if (billingDate <= today) {
+        return billingDate;
+      }
+      billingDate.setMonth(billingDate.getMonth() - 1);
+      return billingDate;
+    };
+    
+    const currentBillingStart = findCurrentBillingDate();
+    
+    // Filtrar solo las transacciones de esta tarjeta
+    const cardTransactions = transactions.filter(t => 
+      t.cardId === selectedCardForChart.id && t.type === "expense"
+    );
+    
+    // Crear rango de -30 a +30 días desde hoy
+    for (let i = -30; i <= 30; i++) {
+      const date = new Date(today);
+      date.setDate(date.getDate() + i);
       
-      cards.forEach(card => {
-        // Filtrar transacciones de esta tarjeta en el mes seleccionado
-        const cardTransactions = transactions.filter(t => {
-          if (!t.cardId || t.cardId !== card.id || t.type !== "expense") return false;
-          const tDate = new Date(t.date);
-          return tDate.getMonth() === selectedMonth && 
-                 tDate.getFullYear() === selectedYear &&
-                 tDate.getDate() <= day;
-        });
-
-        // Calcular gasto acumulado hasta este día
-        const cumulativeAmount = cardTransactions.reduce((sum, t) => sum + t.amount, 0);
-        dataPoint[card.id] = cumulativeAmount > 0 ? cumulativeAmount : null;
-      });
-
-      chartData.push(dataPoint);
-    }
-
-    return chartData;
-  };
-
-  // Calcular el valor máximo del eje Y (redondeado a múltiplo de 100)
-  const calculateYAxisMax = () => {
-    const chartData = prepareChartData();
-    let maxValue = 0;
-
-    chartData.forEach(dataPoint => {
-      cards.forEach(card => {
-        if (dataPoint[card.id] && dataPoint[card.id] > maxValue) {
-          maxValue = dataPoint[card.id];
+      const dayData = {
+        day: i,
+        date: date.toISOString().split('T')[0],
+        dateLabel: date.getDate(),
+        month: date.toLocaleString('es', { month: 'short' }),
+        fullDate: date,
+        isToday: i === 0,
+        isNewMonth: date.getDate() === 1,
+        cumulativeAmount: null as number | null
+      };
+      
+      // Calcular consumo acumulado para días pasados y el día de hoy
+      if (i <= 0) {
+        // Determinar el inicio del período para este día específico
+        let periodStart = new Date(date.getFullYear(), date.getMonth(), selectedCardForChart.billingDate);
+        
+        // Si la fecha de facturación del mes actual aún no ha llegado, usar el mes anterior
+        if (periodStart > date) {
+          periodStart.setMonth(periodStart.getMonth() - 1);
         }
-      });
-    });
-
-    // Redondear hacia arriba al siguiente múltiplo de 100
-    return Math.ceil(maxValue / 100) * 100 || 100;
+        
+        // Calcular el consumo acumulado desde el inicio del período hasta este día
+        const relevantTransactions = cardTransactions.filter(t => {
+          // Convertir la fecha string a Date
+          const tDate = new Date(t.date + 'T00:00:00');
+          
+          // La transacción debe estar entre el inicio del período y el día actual del loop
+          return tDate >= periodStart && tDate <= date;
+        });
+        
+        dayData.cumulativeAmount = relevantTransactions.reduce((sum, t) => sum + t.amount, 0);
+      }
+      
+      data.push(dayData);
+    }
+    
+    return data;
   };
-
-  // Generar opciones de meses
-  const months = [
-    { value: 0, label: "Enero" },
-    { value: 1, label: "Febrero" },
-    { value: 2, label: "Marzo" },
-    { value: 3, label: "Abril" },
-    { value: 4, label: "Mayo" },
-    { value: 5, label: "Junio" },
-    { value: 6, label: "Julio" },
-    { value: 7, label: "Agosto" },
-    { value: 8, label: "Septiembre" },
-    { value: 9, label: "Octubre" },
-    { value: 10, label: "Noviembre" },
-    { value: 11, label: "Diciembre" },
-  ];
-
-  // Generar opciones de años (últimos 3 años y próximo)
-  const currentYear = new Date().getFullYear();
-  const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
-
-  // Colores para las líneas del gráfico
-  const cardColors = [
-    '#8b5cf6', // purple
-    '#3b82f6', // blue
-    '#10b981', // emerald
-    '#f59e0b', // amber
-    '#ef4444', // red
-    '#ec4899', // pink
-    '#14b8a6', // teal
-    '#f97316', // orange
-  ];
 
   // Tooltip personalizado
-  const CustomTooltip = ({ active, payload, label }: any) => {
+  const CustomTooltip = ({ active, payload }: any) => {
     if (active && payload && payload.length) {
+      const data = payload[0].payload;
+      if (data.cumulativeAmount === null) return null;
+      
       return (
         <div className="bg-background border border-border rounded-lg shadow-lg p-4">
-          <p className="font-semibold mb-2">Día {label}</p>
-          {payload.map((entry: any, index: number) => {
-            const card = cards.find(c => c.id === entry.dataKey);
-            if (!card || entry.value === null) return null;
-            
-            return (
-              <div key={index} className="flex items-center gap-2 py-1">
-                <div 
-                  className="w-3 h-3 rounded-full" 
-                  style={{ backgroundColor: entry.color }}
-                />
-                <span className="text-sm">
-                  {card.bankName}: <span className="font-bold">${entry.value.toFixed(2)}</span>
-                </span>
-              </div>
-            );
-          })}
+          <p className="font-semibold text-sm mb-2">
+            {data.dateLabel} de {data.month}
+          </p>
+          <div className="flex items-center gap-2">
+            <DollarSign className="h-4 w-4 text-emerald-600" />
+            <span className="text-lg font-bold text-primary">
+              ${data.cumulativeAmount.toFixed(2)}
+            </span>
+          </div>
         </div>
       );
     }
@@ -315,22 +301,9 @@ const Cards = () => {
     }
     return cardNumber;
   };
-  const getLastTransactionDay = (cardId: string) => {
-  const cardTransactions = transactions.filter(t => {
-    if (!t.cardId || t.cardId !== cardId || t.type !== "expense") return false;
-    const tDate = new Date(t.date);
-    return tDate.getMonth() === selectedMonth && tDate.getFullYear() === selectedYear;
-  });
-  
-  if (cardTransactions.length === 0) return 0;
-  
-  const lastDate = new Date(Math.max(...cardTransactions.map(t => new Date(t.date).getTime())));
-  return lastDate.getDate();
-};
 
   const chartData = prepareChartData();
   const hasTransactions = transactions.some(t => t.cardId && t.type === "expense");
-  const yAxisMax = calculateYAxisMax();
 
   if (loading) {
     return (
@@ -417,122 +390,290 @@ const Cards = () => {
         </div>
 
         {/* Gráfico de Consumo por Tarjeta */}
-        {cards.length > 0 && hasTransactions && (
+        {cards.length > 0 && hasTransactions && selectedCardForChart && (
           <Card className="p-6 shadow-card animate-fade-in">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
               <div className="flex items-center gap-2">
                 <Activity className="h-5 w-5 text-primary" />
-                <h2 className="text-xl font-bold">Consumo Acumulado por Mes</h2>
+                <h2 className="text-xl font-bold">Análisis de Consumo - Períodos de Facturación</h2>
               </div>
               
-              {/* Selectores de Fecha */}
-              <div className="flex items-center gap-2">
-                <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                <Select 
-                  value={selectedMonth.toString()} 
-                  onValueChange={(value) => setSelectedMonth(parseInt(value))}
-                >
-                  <SelectTrigger className="w-[140px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {months.map((month) => (
-                      <SelectItem key={month.value} value={month.value.toString()}>
-                        {month.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              {/* Selector de Tarjeta */}
+              <Select 
+                value={selectedCardForChart.id} 
+                onValueChange={(value) => {
+                  const card = cards.find(c => c.id === value);
+                  if (card) setSelectedCardForChart(card);
+                }}
+              >
+                <SelectTrigger className="w-[240px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {cards.filter(c => c.cardType === "credito").map((card) => (
+                    <SelectItem key={card.id} value={card.id}>
+                      {card.bankName} (••{card.cardNumber.slice(-4)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
 
-                <Select 
-                  value={selectedYear.toString()} 
-                  onValueChange={(value) => setSelectedYear(parseInt(value))}
-                >
-                  <SelectTrigger className="w-[100px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {years.map((year) => (
-                      <SelectItem key={year} value={year.toString()}>
-                        {year}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+            {/* Leyenda Integrada */}
+            <div className="mb-4 p-3 bg-muted/30 rounded-lg">
+              <div className="flex flex-wrap gap-6">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-1 rounded bg-primary"></div>
+                  <span className="text-xs text-muted-foreground">Consumo Real</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-4 rounded bg-primary/20"></div>
+                  <span className="text-xs text-muted-foreground">Periodo de Facturación</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-1 bg-blue-500 rounded"></div>
+                  <span className="text-xs text-muted-foreground">Fecha Facturación</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-1 bg-red-500 rounded"></div>
+                  <span className="text-xs text-muted-foreground">Fecha Pago</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 rounded-full bg-amber-400"></div>
+                  <span className="text-xs text-muted-foreground">Hoy</span>
+                </div>
               </div>
             </div>
 
-            {/* Leyenda de Barras de Referencia */}
-            <div className="flex flex-wrap gap-4 mb-4 p-3 bg-muted/30 rounded-lg">
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 bg-blue-500"></div>
-                <span className="text-xs text-muted-foreground">Fecha de Facturación</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <div className="w-4 h-0.5 bg-red-500"></div>
-                <span className="text-xs text-muted-foreground">Fecha Límite de Pago</span>
-              </div>
-            </div>
+            <ResponsiveContainer width="100%" height={500}>
+              <LineChart data={chartData} margin={{ top: 20, right: 30, left: 20, bottom: 60 }}>
+                <defs>
+                  <linearGradient id="gradient-primary" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="hsl(var(--primary))" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="hsl(var(--primary))" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
 
-            <ResponsiveContainer width="100%" height={450}>
-              <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                <XAxis 
-                  dataKey="day" 
-                  label={{ value: 'Día del Mes', position: 'insideBottom', offset: -5 }}
-                  className="text-xs"
-                />
-                <YAxis 
-                  label={{ value: 'Monto ($)', angle: -90, position: 'insideLeft' }}
-                  className="text-xs"
-                  domain={[0, yAxisMax]}
-                  ticks={Array.from({ length: Math.floor(yAxisMax / 100) + 1 }, (_, i) => i * 100)}
-                />
-                <Tooltip content={<CustomTooltip />} />
-                <Legend 
-                  formatter={(value) => {
-                    const card = cards.find(c => c.id === value);
-                    return card ? `${card.bankName}` : value;
+                
+                {/* Áreas de períodos de facturación */}
+                {(() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  
+                  // Función para encontrar el período actual
+                  const findCurrentBillingDate = () => {
+                    let billingDate = new Date(today.getFullYear(), today.getMonth(), selectedCardForChart.billingDate);
+                    if (billingDate <= today) {
+                      return billingDate;
+                    }
+                    billingDate.setMonth(billingDate.getMonth() - 1);
+                    return billingDate;
+                  };
+                  
+                  const currentBillingDate = findCurrentBillingDate();
+                  const periods = [];
+                  
+                  // Crear 3 períodos
+                  for (let i = -1; i <= 1; i++) {
+                    const periodStart = new Date(currentBillingDate);
+                    periodStart.setMonth(periodStart.getMonth() + i);
+                    
+                    const periodEnd = new Date(periodStart);
+                    periodEnd.setMonth(periodEnd.getMonth() + 1);
+                    periodEnd.setDate(periodEnd.getDate() - 1);
+                    
+                    const paymentDate = new Date(periodEnd);
+                    paymentDate.setMonth(paymentDate.getMonth() + 1);
+                    paymentDate.setDate(selectedCardForChart.paymentDueDate);
+                    
+                    // Calcular días desde hoy - convertir a número con .getTime()
+                    const startDay = Math.floor((periodStart.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    const endDay = Math.floor((periodEnd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    
+                    periods.push({
+                      start: periodStart,
+                      end: periodEnd,
+                      startDay,
+                      endDay,
+                      paymentDate,
+                      isCurrent: i === 0
+                    });
+                  }
+                  
+                  return (
+                    <>
+                      {periods.map((period, idx) => (
+                        <ReferenceArea
+                          key={`period-${idx}`}
+                          x1={period.startDay}
+                          x2={period.endDay}
+                          fill="hsl(var(--primary))"
+                          fillOpacity={period.isCurrent ? 0.15 : 0.05}
+                          stroke="hsl(var(--primary))"
+                          strokeOpacity={0.3}
+                          strokeWidth={1}
+                        />
+                      ))}
+                    </>
+                  );
+                })()}
+
+                {/* Líneas de separación de meses */}
+                {chartData.filter(d => d.isNewMonth).map((d, idx) => (
+                  <ReferenceLine
+                    key={`month-${idx}`}
+                    x={d.day}
+                    stroke="hsl(var(--muted-foreground))"
+                    strokeDasharray="5 5"
+                    strokeWidth={1}
+                    label={{
+                      value: d.month.toUpperCase(),
+                      position: 'top',
+                      fill: 'hsl(var(--muted-foreground))',
+                      fontSize: 11,
+                      fontWeight: 'bold'
+                    }}
+                  />
+                ))}
+
+                {/* Línea de "Hoy" */}
+                <ReferenceLine
+                  x={0}
+                  stroke="#f59e0b"
+                  strokeWidth={3}
+                  label={{
+                    value: 'HOY',
+                    position: 'top',
+                    fill: '#f59e0b',
+                    fontSize: 12,
+                    fontWeight: 'bold'
                   }}
                 />
 
-                {/* Líneas de referencia para fechas de facturación */}
-                {cards.map((card) => (
-                  <ReferenceLine 
-                    key={`billing-${card.id}`}
-                    x={card.billingDate.toString()}
-                    stroke="#3b82f6"
-                    strokeDasharray="5 5"
-                    strokeWidth={1.5}
-                    opacity={0.6}
-                  />
-                ))}
+                {/* Líneas de fechas de facturación */}
+                {(() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  
+                  const findCurrentBillingDate = () => {
+                    let billingDate = new Date(today.getFullYear(), today.getMonth(), selectedCardForChart.billingDate);
+                    if (billingDate <= today) return billingDate;
+                    billingDate.setMonth(billingDate.getMonth() - 1);
+                    return billingDate;
+                  };
+                  
+                  const currentBillingDate = findCurrentBillingDate();
+                  const billingLines = [];
+                  
+                  for (let i = -1; i <= 1; i++) {
+                    const billingDate = new Date(currentBillingDate);
+                    billingDate.setMonth(billingDate.getMonth() + i);
+                    const billingDay = Math.floor((billingDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    
+                    if (billingDay >= -30 && billingDay <= 30) {
+                      billingLines.push(
+                        <ReferenceLine
+                          key={`billing-${i}`}
+                          x={billingDay}
+                          stroke="#3b82f6"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          label={{
+                            value: '📅 Facturación',
+                            position: 'insideBottomLeft',
+                            fill: '#3b82f6',
+                            fontSize: 10,
+                            offset: 10
+                          }}
+                        />
+                      );
+                    }
+                  }
+                  
+                  return billingLines;
+                })()}
 
-                {/* Líneas de referencia para fechas de pago */}
-                {cards.map((card) => (
-                  <ReferenceLine 
-                    key={`payment-${card.id}`}
-                    x={card.paymentDueDate.toString()}
-                    stroke="#ef4444"
-                    strokeDasharray="5 5"
-                    strokeWidth={1.5}
-                    opacity={0.6}
-                  />
-                ))}
+                {/* Líneas de fechas de pago */}
+                {(() => {
+                  const today = new Date();
+                  today.setHours(0, 0, 0, 0);
+                  
+                  const findCurrentBillingDate = () => {
+                    let billingDate = new Date(today.getFullYear(), today.getMonth(), selectedCardForChart.billingDate);
+                    if (billingDate <= today) return billingDate;
+                    billingDate.setMonth(billingDate.getMonth() - 1);
+                    return billingDate;
+                  };
+                  
+                  const currentBillingDate = findCurrentBillingDate();
+                  const paymentLines = [];
+                  
+                  for (let i = -1; i <= 1; i++) {
+                    const periodStart = new Date(currentBillingDate);
+                    periodStart.setMonth(periodStart.getMonth() + i);
+                    
+                    const periodEnd = new Date(periodStart);
+                    periodEnd.setMonth(periodEnd.getMonth() + 1);
+                    periodEnd.setDate(periodEnd.getDate() - 1);
+                    
+                    const paymentDate = new Date(periodEnd);
+                    paymentDate.setMonth(paymentDate.getMonth() + 1);
+                    paymentDate.setDate(selectedCardForChart.paymentDueDate);
+                    
+                    const paymentDay = Math.floor((paymentDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+                    
+                    if (paymentDay >= -30 && paymentDay <= 30) {
+                      paymentLines.push(
+                        <ReferenceLine
+                          key={`payment-${i}`}
+                          x={paymentDay}
+                          stroke="#ef4444"
+                          strokeWidth={2}
+                          strokeDasharray="5 5"
+                          label={{
+                            value: '💳 Pago',
+                            position: 'insideBottomRight',
+                            fill: '#ef4444',
+                            fontSize: 10,
+                            offset: 10
+                          }}
+                        />
+                      );
+                    }
+                  }
+                  
+                  return paymentLines;
+                })()}
 
-                {/* Líneas de consumo por tarjeta */}
-                {cards.map((card, index) => (
-                  <Line
-                    key={card.id}
-                    type="monotone"
-                    dataKey={card.id}
-                    stroke={cardColors[index % cardColors.length]}
-                    strokeWidth={2.5}
-                    dot={false}
-                    activeDot={{ r: 6 }}
-                    connectNulls
-                  />
-                ))}
+                <XAxis
+                  dataKey="day"
+                  tickFormatter={(value) => {
+                    const item = chartData.find(d => d.day === value);
+                    return item ? item.dateLabel : value;
+                  }}
+                  tick={{ fontSize: 11 }}
+                  label={{ value: 'Días (centrado en HOY)', position: 'insideBottom', offset: -45, fontSize: 12 }}
+                />
+
+                <YAxis
+                  tick={{ fontSize: 11 }}
+                  label={{ value: 'Consumo Acumulado ($)', angle: -90, position: 'insideLeft', fontSize: 12 }}
+                  domain={[0, 'auto']}
+                />
+
+                <Tooltip content={<CustomTooltip />} />
+
+                {/* Línea de consumo real */}
+                <Line
+                  type="monotone"
+                  dataKey="cumulativeAmount"
+                  stroke="hsl(var(--primary))"
+                  strokeWidth={3}
+                  dot={false}
+                  activeDot={{ r: 6 }}
+                  connectNulls={false}
+                />
               </LineChart>
             </ResponsiveContainer>
           </Card>
