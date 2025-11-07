@@ -30,6 +30,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { 
   CreditCard,
   Search,
@@ -38,13 +45,15 @@ import {
   Trash2,
   Calendar,
   DollarSign,
-  Building2,
   TrendingUp,
-  Wallet
+  Wallet,
+  Activity,
+  CalendarDays
 } from "lucide-react";
 import { NewCardForm } from "@/components/forms/NewCardForm";
 import { EditCardForm } from "@/components/forms/EditCardForm";
 import { toast } from "sonner";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
 
 interface CreditCardData {
   id: string;
@@ -61,8 +70,18 @@ interface CreditCardData {
   createdAt: any;
 }
 
+interface Transaction {
+  id: string;
+  amount: number;
+  date: string;
+  cardId?: string;
+  type: "expense" | "income";
+  description: string;
+}
+
 const Cards = () => {
   const [cards, setCards] = useState<CreditCardData[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [loading, setLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -70,6 +89,10 @@ const Cards = () => {
   const [selectedCard, setSelectedCard] = useState<CreditCardData | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  
+  // Estados para selector de fecha
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth());
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
   // Cargar tarjetas desde Firestore
   useEffect(() => {
@@ -94,6 +117,21 @@ const Cards = () => {
         setLoading(false);
       }
     );
+
+    return () => unsubscribe();
+  }, []);
+
+  // Cargar transacciones
+  useEffect(() => {
+    const q = query(collection(db, 'transacciones'));
+    
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const transactionsData = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data()
+      } as Transaction));
+      setTransactions(transactionsData);
+    });
 
     return () => unsubscribe();
   }, []);
@@ -157,7 +195,119 @@ const Cards = () => {
     .reduce((sum, c) => sum + (c.currentBalance || 0), 0);
   const availableCredit = totalCreditLimit - totalCurrentBalance;
 
-  // Formatear número de tarjeta (ocultar dígitos del medio)
+  // Obtener días del mes seleccionado
+  const getDaysInMonth = (month: number, year: number) => {
+    return new Date(year, month + 1, 0).getDate();
+  };
+
+  // Preparar datos para el gráfico
+  const prepareChartData = () => {
+    const daysInMonth = getDaysInMonth(selectedMonth, selectedYear);
+
+    // Crear array con todos los días del mes
+    const chartData = [];
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dataPoint: any = { day: day.toString() };
+      
+      cards.forEach(card => {
+        // Filtrar transacciones de esta tarjeta en el mes seleccionado
+        const cardTransactions = transactions.filter(t => {
+          if (!t.cardId || t.cardId !== card.id || t.type !== "expense") return false;
+          const tDate = new Date(t.date);
+          return tDate.getMonth() === selectedMonth && 
+                 tDate.getFullYear() === selectedYear &&
+                 tDate.getDate() <= day;
+        });
+
+        // Calcular gasto acumulado hasta este día
+        const cumulativeAmount = cardTransactions.reduce((sum, t) => sum + t.amount, 0);
+        dataPoint[card.id] = cumulativeAmount > 0 ? cumulativeAmount : null;
+      });
+
+      chartData.push(dataPoint);
+    }
+
+    return chartData;
+  };
+
+  // Calcular el valor máximo del eje Y (redondeado a múltiplo de 100)
+  const calculateYAxisMax = () => {
+    const chartData = prepareChartData();
+    let maxValue = 0;
+
+    chartData.forEach(dataPoint => {
+      cards.forEach(card => {
+        if (dataPoint[card.id] && dataPoint[card.id] > maxValue) {
+          maxValue = dataPoint[card.id];
+        }
+      });
+    });
+
+    // Redondear hacia arriba al siguiente múltiplo de 100
+    return Math.ceil(maxValue / 100) * 100 || 100;
+  };
+
+  // Generar opciones de meses
+  const months = [
+    { value: 0, label: "Enero" },
+    { value: 1, label: "Febrero" },
+    { value: 2, label: "Marzo" },
+    { value: 3, label: "Abril" },
+    { value: 4, label: "Mayo" },
+    { value: 5, label: "Junio" },
+    { value: 6, label: "Julio" },
+    { value: 7, label: "Agosto" },
+    { value: 8, label: "Septiembre" },
+    { value: 9, label: "Octubre" },
+    { value: 10, label: "Noviembre" },
+    { value: 11, label: "Diciembre" },
+  ];
+
+  // Generar opciones de años (últimos 3 años y próximo)
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 5 }, (_, i) => currentYear - 2 + i);
+
+  // Colores para las líneas del gráfico
+  const cardColors = [
+    '#8b5cf6', // purple
+    '#3b82f6', // blue
+    '#10b981', // emerald
+    '#f59e0b', // amber
+    '#ef4444', // red
+    '#ec4899', // pink
+    '#14b8a6', // teal
+    '#f97316', // orange
+  ];
+
+  // Tooltip personalizado
+  const CustomTooltip = ({ active, payload, label }: any) => {
+    if (active && payload && payload.length) {
+      return (
+        <div className="bg-background border border-border rounded-lg shadow-lg p-4">
+          <p className="font-semibold mb-2">Día {label}</p>
+          {payload.map((entry: any, index: number) => {
+            const card = cards.find(c => c.id === entry.dataKey);
+            if (!card || entry.value === null) return null;
+            
+            return (
+              <div key={index} className="flex items-center gap-2 py-1">
+                <div 
+                  className="w-3 h-3 rounded-full" 
+                  style={{ backgroundColor: entry.color }}
+                />
+                <span className="text-sm">
+                  {card.bankName}: <span className="font-bold">${entry.value.toFixed(2)}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // Formatear número de tarjeta
   const formatCardNumber = (cardNumber: string) => {
     const cleaned = cardNumber.replace(/\s/g, '');
     if (cleaned.length === 16) {
@@ -165,6 +315,22 @@ const Cards = () => {
     }
     return cardNumber;
   };
+  const getLastTransactionDay = (cardId: string) => {
+  const cardTransactions = transactions.filter(t => {
+    if (!t.cardId || t.cardId !== cardId || t.type !== "expense") return false;
+    const tDate = new Date(t.date);
+    return tDate.getMonth() === selectedMonth && tDate.getFullYear() === selectedYear;
+  });
+  
+  if (cardTransactions.length === 0) return 0;
+  
+  const lastDate = new Date(Math.max(...cardTransactions.map(t => new Date(t.date).getTime())));
+  return lastDate.getDate();
+};
+
+  const chartData = prepareChartData();
+  const hasTransactions = transactions.some(t => t.cardId && t.type === "expense");
+  const yAxisMax = calculateYAxisMax();
 
   if (loading) {
     return (
@@ -249,6 +415,128 @@ const Cards = () => {
             </div>
           </Card>
         </div>
+
+        {/* Gráfico de Consumo por Tarjeta */}
+        {cards.length > 0 && hasTransactions && (
+          <Card className="p-6 shadow-card animate-fade-in">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+              <div className="flex items-center gap-2">
+                <Activity className="h-5 w-5 text-primary" />
+                <h2 className="text-xl font-bold">Consumo Acumulado por Mes</h2>
+              </div>
+              
+              {/* Selectores de Fecha */}
+              <div className="flex items-center gap-2">
+                <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                <Select 
+                  value={selectedMonth.toString()} 
+                  onValueChange={(value) => setSelectedMonth(parseInt(value))}
+                >
+                  <SelectTrigger className="w-[140px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {months.map((month) => (
+                      <SelectItem key={month.value} value={month.value.toString()}>
+                        {month.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+
+                <Select 
+                  value={selectedYear.toString()} 
+                  onValueChange={(value) => setSelectedYear(parseInt(value))}
+                >
+                  <SelectTrigger className="w-[100px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {years.map((year) => (
+                      <SelectItem key={year} value={year.toString()}>
+                        {year}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {/* Leyenda de Barras de Referencia */}
+            <div className="flex flex-wrap gap-4 mb-4 p-3 bg-muted/30 rounded-lg">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-blue-500"></div>
+                <span className="text-xs text-muted-foreground">Fecha de Facturación</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-0.5 bg-red-500"></div>
+                <span className="text-xs text-muted-foreground">Fecha Límite de Pago</span>
+              </div>
+            </div>
+
+            <ResponsiveContainer width="100%" height={450}>
+              <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                <XAxis 
+                  dataKey="day" 
+                  label={{ value: 'Día del Mes', position: 'insideBottom', offset: -5 }}
+                  className="text-xs"
+                />
+                <YAxis 
+                  label={{ value: 'Monto ($)', angle: -90, position: 'insideLeft' }}
+                  className="text-xs"
+                  domain={[0, yAxisMax]}
+                  ticks={Array.from({ length: Math.floor(yAxisMax / 100) + 1 }, (_, i) => i * 100)}
+                />
+                <Tooltip content={<CustomTooltip />} />
+                <Legend 
+                  formatter={(value) => {
+                    const card = cards.find(c => c.id === value);
+                    return card ? `${card.bankName}` : value;
+                  }}
+                />
+
+                {/* Líneas de referencia para fechas de facturación */}
+                {cards.map((card) => (
+                  <ReferenceLine 
+                    key={`billing-${card.id}`}
+                    x={card.billingDate.toString()}
+                    stroke="#3b82f6"
+                    strokeDasharray="5 5"
+                    strokeWidth={1.5}
+                    opacity={0.6}
+                  />
+                ))}
+
+                {/* Líneas de referencia para fechas de pago */}
+                {cards.map((card) => (
+                  <ReferenceLine 
+                    key={`payment-${card.id}`}
+                    x={card.paymentDueDate.toString()}
+                    stroke="#ef4444"
+                    strokeDasharray="5 5"
+                    strokeWidth={1.5}
+                    opacity={0.6}
+                  />
+                ))}
+
+                {/* Líneas de consumo por tarjeta */}
+                {cards.map((card, index) => (
+                  <Line
+                    key={card.id}
+                    type="monotone"
+                    dataKey={card.id}
+                    stroke={cardColors[index % cardColors.length]}
+                    strokeWidth={2.5}
+                    dot={false}
+                    activeDot={{ r: 6 }}
+                    connectNulls
+                  />
+                ))}
+              </LineChart>
+            </ResponsiveContainer>
+          </Card>
+        )}
 
         {/* Search Bar */}
         <Card className="p-4 shadow-card animate-scale-in">
