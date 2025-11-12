@@ -9,6 +9,7 @@ import Cards from "./pages/Cards";
 import Categories from "./pages/Categories";
 import Goals from "./pages/Goals";
 import NotFound from "./pages/NotFound";
+import Auth from "./pages/Auth";
 
 const queryClient = new QueryClient();
 
@@ -24,6 +25,7 @@ const App = () => (
           <Route path="/categorias" element={<Categories />} />
           <Route path="/tarjetas" element={<Cards />} />
           <Route path="/metas" element={<Goals />} />
+          <Route path="/auth" element={<Auth />} />
           {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
           <Route path="*" element={<NotFound />} />
         </Routes>
